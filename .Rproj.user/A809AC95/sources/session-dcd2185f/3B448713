@@ -1,0 +1,28 @@
+{
+    "id": "3B448713",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1757355345962.0,
+    "source_on_save": false,
+    "relative_order": 3,
+    "properties": {
+        "id": "b2feb6d39aa9407ab92d7d080e6badfd",
+        "name": "clusters",
+        "title": "clusters",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1757355345962,
+    "read_only": false,
+    "read_only_alternatives": []
+}

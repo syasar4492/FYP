@@ -1,0 +1,26 @@
+{
+    "id": "8FBD1BC0",
+    "path": "~/Library/CloudStorage/OneDrive-ImperialCollegeLondon/Ladame's Lab/flow_pipeline/scripts/plot_raw.R",
+    "project_path": "scripts/plot_raw.R",
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": true,
+    "created": 1757233935329.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "23,0",
+        "scrollLine": "0"
+    },
+    "folds": "7|32|16|0|\n24|35|29|0|\n",
+    "lastKnownWriteTime": 1757234847,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1757415665412,
+    "read_only": false,
+    "read_only_alternatives": []
+}
