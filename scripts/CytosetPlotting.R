@@ -1,6 +1,7 @@
 library(flowWorkspace)
 library(flowCore)
 library(flowViz)
+library(openCyto)
 
 rm(list = ls())
 read_files <- function(path, pattern){
@@ -48,137 +49,167 @@ plot_cytoset <- function(cs, xchannel = "FL1-H", ychannel = "FSC-H") {
 
 
 #histogram
-plot_1d_density <- function(cs, channel = 'FL1.H', gs = NULL, gate_alias = "nonDebris"){
+plot_1d_density <- function(cs, channel = 'FL1.H', gs = NULL, gate_alias = "nonDebris", per_gate = NULL, global_gate = NULL) {
   fs <- cytoset_to_flowSet(cs)
   f <- as.formula(paste("~", channel))
+  p <- densityplot(f, fs, overlap = 0)
   
-  if (!is.null(gs)){
+  if (!is.null(gs)) {
     gate_obj <- gs_pop_get_gate(gs, gate_alias)[[1]]
-    if (gate_obj@max == Inf) { 
-      threshold <- gate_obj@min  
-      cat("Min threshold by mindensity:", threshold, "\n")
-      p <- densityplot(f, fs, overlap = 0, refline = threshold)
-    }
-    else {
-      cat("Min:", gate_obj@min, "\n")
-      cat("Max:", gate_obj@max, "\n")
-      min_val = gate_obj@min
-      max_val = gate_obj@max
-      p <- densityplot(f, fs, overlap = 0) +
-        latticeExtra::layer(
-        panel.abline(v = c(min_val, max_val), col = "red", lty = 2),
-        data = list(min_val = min_val, max_val = max_val))
+    # if (!is.null(per_gate)) {
+    #   # Store per_gate in local variable to avoid scoping issues
+    #   per_gate_vals <- as.numeric(per_gate)
+    #   p <- p + latticeExtra::layer(
+    #     panel.abline(v = per_gate_vals, col = "red", lty = 2)
+    #   )
+    # }
+    
+    if (!is.null(global_gate)) {
+      global_gate_val <- as.numeric(global_gate)  
+      p <- p + latticeExtra::layer(
+        panel.abline(v = global_gate_val, col = "blue", lty = 3)
+      )
     }
   }
-   else {
-    p <- densityplot(f, fs, overlap = 0)
-  }
-  p
+  
+  return(p)
 }
+
 
 #gating dg beads
-gating_dg <- function(cs_dg){
+gating_dg <- function(cs_dg, yChannel = "FL1-H") {
+  # Create GatingSet
   gs_dg <- GatingSet(cs_dg)
+  fs_all <- gs_pop_get_data(gs_dg)
+  sample_ids <- sampleNames(fs_all)
   
-  gs_add_gating_method(
-    gs_dg,
-    alias = "nonDebris",
-    pop = "+",
-    parent = "root",
-    dims = "FL1.H",
-    gating_method = "mindensity"
+  # Store per-sample cutoffs
+  gate_cutoffs <- data.frame(
+    sample = character(),
+    cutoff = numeric(),
+    stringsAsFactors = FALSE
   )
-  recompute(gs_dg)
-  gate_obj <- gs_pop_get_gate(gs_dg, "nonDebris")[[1]]
-  cat("Type of gate is:", class(gate_obj), "\n")
-  cat("Slot names are:", slotNames(gate_obj), "\n")
-  if (class(gate_obj) == "rectangleGate"){
-    min_val <- gate_obj@min
-    max_val <- gate_obj@max
-    filterId <- gate_obj@filterId
-    cat("Min: ", min_val, "\n")
-    cat("Max: ", max_val, "\n")
-    cat("FilterID:", filterId, "\n")
+  
+  for (sid in sample_ids) {
+    fr <- fs_all[[sid]]
+    
+    # Compute mindensity gate for this sample
+    gate <- mindensity(fr, channel = yChannel)
+    
+    # Add gate to the GatingSet
+    gs_pop_add(gs_dg[[sid]], gate, parent = "root", name = "nonDebris")
+    
+    # Extract the cutoff value
+    cutoff <- gate@min  # mindensity rectangleGate defines a min boundary along the channel
+    
+    # Store in data frame
+    gate_cutoffs <- rbind(gate_cutoffs, data.frame(sample = sid, cutoff = cutoff))
+    
+    # Print info
+    message("Sample ", sid, " cutoff: ", signif(cutoff, 5))
   }
-  return(gs_dg)
+  
+  # Recompute the GatingSet
+  recompute(gs_dg)
+  
+  # Global cutoff (minimum of all sample cutoffs)
+  global_cutoff <- min(gate_cutoffs$cutoff)
+  message("\nGlobal gate cutoff: ", signif(global_cutoff, 5))
+  
+  # Store global value as attribute
+  attr(gs_dg, "global_cutoff") <- global_cutoff
+  
+  return(list(gs = gs_dg, gate_cutoffs = gate_cutoffs, global_cutoff = global_cutoff))
 }
 
-gating_mmb <- function(cs_mmb){
-  
+
+gating_mmb <- function(cs_mmb, yChannel = "FSC-H", smooth_ratio = 1, drop_frac = 0.05) {
   gs_mmb <- GatingSet(cs_mmb)
+  fs_all <- gs_pop_get_data(gs_mmb)
+  sample_ids <- sampleNames(fs_all)
   
+  gate_ranges <- data.frame(
+    sample = character(),
+    cutoff = numeric(),
+    stringsAsFactors = FALSE
+  )
   
-  # for register_plugins to work later:
-  #pp_res is preprocessing results, unused here, channels is multiple even though we use one
-  peak_density_gate <- function(fr, pp_res, yChannel = "FSC.H", filterId = "peak_density_gate", smooth_ratio = 1, drop_frac = 0.05, ...) { 
-    vars = exprs(fr)[, yChannel]
-    dens = density(vars, adjust = smooth_ratio)
+  for (sid in sample_ids) {
+    fr <- fs_all[[sid]]
+    vals <- as.vector(exprs(fr)[, yChannel])
+    dens <- density(vals, adjust = smooth_ratio)
     
     peak_idx <- which.max(dens$y)
     
     idx_left <- peak_idx
-    while (idx_left > 1 && dens$y[idx_left] > drop_frac * max(dens$y)){
-      idx_left <- idx_left - 1
-    }
-    
+    while (idx_left > 1 && dens$y[idx_left] > drop_frac * max(dens$y)) idx_left <- idx_left - 1
     idx_right <- peak_idx
-    while (idx_right < length(dens$y) && dens$y[idx_right] > drop_frac * max(dens&y)){
-      idx_right <- idx_right + 1
-    }
+    while (idx_right < length(dens$y) && dens$y[idx_right] > drop_frac * max(dens$y)) idx_right <- idx_right + 1
     
-    min_val = dens$x[idx_left]
-    max_val = dens$x[idx_right]
+    min_val <- dens$x[idx_left]
+    max_val <- dens$x[idx_right]
     
     gate <- rectangleGate(
-      filterId = "peak_density_gate",
-      .gate = structure(list(c(min_val, max_val)), names = yChannel)
-    )
+      filterId = "nonDebris",
+      .gate = structure(list(c(min_val, max_val)), names = yChannel))
     
-    return(gate)
+    
+    gs_pop_add(gs_mmb[[sid]], gate, parent = "root", name = "nonDebris")
+    
+    gate_ranges <- rbind(gate_ranges, data.frame(sample = sid, min_val = min_val, max_val = max_val))
+    message("Sample ", sid, " gate: ", signif(min_val, 5), " - ", signif(max_val, 5))
   }
   
-  register_plugins(fun = peak_density_gate, methodName = "peak_density_gate")
-  
-  gs_add_gating_method(
-    gs_mmb,
-    alias = "nonDebris",
-    pop = "+",
-    parent = "root",
-    dims = "FSC.H",
-    gating_method = "peak_density_gate",
-    gating_args = list(smooth_ratio = 1, drop_frac = 0.05)
-  )
   recompute(gs_mmb)
   
-  gate_obj <- gs_pop_get_gate(gs_mmb, "nonDebris")[[1]]
-  cat("Type of gate is:", class(gate_obj), "\n")
-  cat("Slot names are:", slotNames(gate_obj), "\n")
-  if (class(gate_obj) == "rectangleGate"){
-    min_val <- gate_obj@min
-    max_val <- gate_obj@max
-    cat("Peak density gate limits:", min_val, "to", max_val, "\n")
-    filterId <- gate_obj@filterId
-    cat("FilterID:", filterId)
-  }
-  return(gs_mmb)
+  global_cutoff <- min(gate_ranges$min_val)
+  global_max <- max(gate_ranges$max_val)
+  message("\nGlobal gate range: ", signif(global_cutoff, 5), " - ", signif(global_max, 5))
+  
+  # Attach as attributes
+  attr(gs_mmb, "global_gate_range") <- c(global_cutoff, global_max)
+  attr(gs_mmb, "gate_ranges") <- gate_ranges
+  
+  # Return both gate info and GatingSet
+  return(list(gs = gs_mmb, gate_ranges = gate_ranges, global_range = c(global_cutoff, global_max)))
 }
 
 
-#ungated main
-rm(list = setdiff(ls(), lsf.str()))
-tmp_dg <- read_files(path = 'data/raw/09.09.2025_separated controls_0.25M NaCl TE Tween BSA', pattern = 'DG')
-cs_dg <- load_cytoset(tmp_dg)
-cs_dg_t <- realize_view(cs_dg)
-cs_dg_t <- apply_transform(cs_dg_t)
-plot_cytoset(cs_dg_t)
-plot_1d_density(cs_dg_t)
+# Ungated visualization function
+visualize_controls <- function(pattern, path = "data/raw/09.09.2025_separated controls_0.25M NaCl TE Tween BSA") {
+  tmp <- read_files(path = path, pattern = pattern)
+  cs <- load_cytoset(tmp)
+  cs_t <- realize_view(cs)
+  cs_t <- apply_transform(cs_t)
+  
+  # Determine channel based on pattern
+  if (pattern == "DG") {
+    channel <- "FL1.H"
+  } else {
+    channel <- "FSC.H"
+  }
+  
+  # Generate plots
+  p_2d <- plot_cytoset(cs_t)
+  p_1d <- plot_1d_density(cs_t, channel = channel)
+  
+  return(list(
+    pattern = pattern,
+    cytoset = cs_t,
+    plot_2d = p_2d,
+    plot_1d = p_1d
+  ))
+}
 
-tmp_mmb <- read_files(path = 'data/raw/09.09.2025_separated controls_0.25M NaCl TE Tween BSA', pattern = 'MMB')
-cs_mmb <- load_cytoset(tmp_mmb)
-cs_mmb_t <- realize_view(cs_mmb)
-cs_mmb_t <- apply_transform(cs_mmb_t)
-plot_cytoset(cs_mmb_t)
-plot_1d_density(cs_mmb_t, "FSC.H")
+# Usage example:
+# Visualize DG controls
+dg_vis <- visualize_controls("DG")
+print(dg_vis$plot_2d)
+print(dg_vis$plot_1d)
+
+mmb_vis <- visualize_controls("MMB")
+print(mmb_vis$plot_2d)
+print(mmb_vis$plot_1d)
 
 
 #------------
@@ -193,44 +224,47 @@ plot_1d_density(cs_mmb_t, "FSC.H")
 rm(list = setdiff(ls(), lsf.str()))
 # Define a function for loading, gating, and plotting
 process_controls <- function(pattern, path = "data/raw/09.09.2025_separated controls_0.25M NaCl TE Tween BSA") {
-  # Load files matching the pattern
   tmp <- read_files(path = path, pattern = pattern)
-  
-  # Convert to cytoset
   cs <- load_cytoset(tmp)
   
-  # Apply transformations
   cs_gating <- realize_view(cs)
   cs_gating <- apply_transform(cs_gating)
   
-  # Apply gating
-  if (pattern == "DG"){
-    gs <- gating_dg(cs_gating)
-    p <- plot_1d_density(cs_gating, channel = "FL1.H", gs = gs, gate_alias = "nonDebris")
+  if (pattern == "DG") {
+    res <- gating_dg(cs_gating)
+    gs <- res$gs
+    global_cutoff <- res$global_cutoff
+    gate_cutoffs <- res$gate_cutoffs
+    p <- plot_1d_density(cs_gating, channel = "FL1.H", gs = gs, gate_alias = "nonDebris", per_gate = gate_cutoffs$cutoff, global_gate = global_cutoff)
+    return(list(pattern = pattern, plot = p, gs = gs, gate_ranges = gate_cutoffs, global_range = global_cutoff))
+  } else {
+    res <- gating_mmb(cs_gating)
+    gs <- res$gs
+    global_range <- res$global_range
+    gate_ranges <- res$gate_ranges
+    
+    # For plotting: pass gs only, as before
+    p <- plot_1d_density(cs_gating, channel = "FSC.H", gs = gs, gate_alias = "nonDebris", per_gate = c(gate_ranges$min_val, gate_ranges$max_val), global_gate = global_range)
+    
+    # Return all useful info
+    return(list(pattern = pattern, plot = p, gs = gs, 
+                gate_ranges = gate_ranges, global_range = global_range))
   }
-  else {
-    gs <- gating_mmb(cs_gating)
-    p <- plot_1d_density(cs_gating, channel = "FSC.H", gs = gs, gate_alias = "nonDebris")
-  }
-  
-  # Plot
-  return(p)
 }
 
-# List of particle types
+
 patterns <- c("DG", "3MMB", "6MMB", "8MMB")
 
-# Loop over particle types and generate plots
-plots <- lapply(patterns, process_controls)
+results <- lapply(patterns, process_controls)
+names(results) <- patterns
+gate_summary <- lapply(results, function(x) x$global_range)
+saveRDS(gate_summary, "gate_summary_by_type.rds")
 
-# Show each plot one at a time
-for (p in plots) {
-  print(p)
-  # optional pause if you want to step through
+
+for (ptype in names(results)) {
+  cat("\nShowing plot for", ptype, "...\n")
+  print(results[[ptype]]$plot)
   readline("Press [enter] to continue")
 }
-
-
-
 
 
