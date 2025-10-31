@@ -1,1 +1,1 @@
-# miRNA-Flow Automation
+# miRNA-Flow Software Automation
